@@ -2,9 +2,9 @@
 
 brigde is a dynamic port forwarder over HTTP (with HTTP PROXY support)
 
-In some places, network is locked behind a firewall and Internet connection is available only by using a proxy server. If you wishes to connect to your SSH at home, you're in trouble. However, there is a simple solution to this: tunneling over HTTPS. However, if you are one of those lucky guys that cannot use tunneling over HTTPS, this page can help you.
+In some places, network is locked behind a firewall and Internet connection is available only by using a proxy server. If you wishes to connect to your SSH at home, you're in trouble. However, there is a simple solution to this: [tunneling over HTTPS](http://www.google.com.br/search?q=ssh+over+http+proxy). However, if you are one of those lucky guys that cannot use tunneling over HTTPS, this page can help you.
 
-Using any protocol that can exchange information, it is possible to encapsulate a connection over it. Some not-so-common examples are: IP-over-DNS, IP-over-ICMP. This page shows a TCP tunneling solution (like ssh -L option) (ab)using HTTP.
+Using any protocol that can exchange information, it is possible to encapsulate a connection over it. Some not-so-common examples are: [IP-over-DNS](http://thomer.com/howtos/nstx.html), [IP-over-ICMP](http://thomer.com/icmptx/). This page shows a TCP tunneling solution (like ssh -L option) (ab)using HTTP.
 
 The program is divided in two parts: the first one implements a HTTP server, that can be setup to run on any server. However, it is generally easier to have ports 80 or 8080 as authorized ports in your proxy server.
 The seconds part is the client program. It opens a local TCP port or reads STDIN. After a connection is received, it connects to the server program just like a browser would do and exchange packages using HTTP requests (in this case: GET, PUT, POST, DELETE). 
