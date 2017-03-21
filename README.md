@@ -61,3 +61,9 @@ Password:
 
 mysshserver2 $
 ```
+
+If you need that client connect to bridge over a HTTP Proxy, you can set the standard environment vars like http_proxy.
+
+```
+client$ http_proxy=http://myuser:pass@myproxy:3128 ruby bridge 8022 http://myserver:8080/bridge mysshserver.xxx.com 22
+```
