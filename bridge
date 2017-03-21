@@ -1,206 +1,225 @@
 #!/usr/bin/ruby
+# vim: noai:ts=4:sw=4
 #
-#  Copyright (C) 2010 by Luiz Angelo Daros de Luca
+#  Copyright (C) 2010-2017 by Luiz Angelo Daros de Luca
 #    luizluca@gmail.com
-#                                               
+#
 #    This program is free software; you can redistribute it and/or modify
 #    it under the terms of the GNU General Public License as published by
 #    the Free Software Foundation; either version 2 of the License, or
-#    any later version.  
-#                                                                     
-#    This program is distributed in the hope that it will be useful,  
-#    but WITHOUT ANY WARRANTY; without even the implied warranty of  
-#    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the  
-#    GNU General Public License for more details.                  
-#  
+#    any later version.
+#
+#    This program is distributed in the hope that it will be useful,
+#    but WITHOUT ANY WARRANTY; without even the implied warranty of
+#    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+#    GNU General Public License for more details.
+#
 #    Created on 2010-08-10
 #
 # Changelog:
+#
+# * 2017-03-17
+# - Add support for http proxy authentication using auto-detect support
 #
 # * 2010-09-01
 # - Add TCP keepalive flags for local socket (thanks Jan Adámek)
 # - Increased local buffer to 640k
 # - Fixed sync problem with stdin/out when using as ProxyCommand inside ssh config
 # - Reconnection on client-webrick disconnection
-# - Fixed proxy absence 
+# - Fixed proxy absence
 # - Specified webrick timeout (10m)
 # - Treated more signals
 # - Divide connection (open, read, write)
 #
-#################
-#
-# Port Forward client/server over HTTP 
 #
 #################
+#
+# Port Forward client/server over HTTP
+#
+#################
+
+class String
+    def strip_heredoc
+        min = scan(/^[ \t]*(?=\S)/).min
+        if min == nil
+            indent=0
+        else
+            indent=min.size
+        end
+        gsub(/^[ \t]{#{indent}}/, '')
+    end
+end
 
 case ARGV.size
-	when 2
-		server=true
+    when 2
+        server=true
         location=ARGV[1]
- 	when 4
-		server=false
+     when 4
+        server=false
         url=ARGV[1]
-		remHost=ARGV[2]
-		remPort=ARGV[3].to_i
-	else
-	$stderr.puts <<EOF
-Use as server: 
-#$0 localPort bridgeLocation
-
-Use as client:
-#$0 localPort|STDIN bridgeURL remoteAddress remotePort 
-
-Ex:
-bridge$ #$0 8080 /bridge
-
-client$ #$0 8022 http://mybridge:8080/bridge remoteServer 22
-client$ ssh localhost -p 8022
-EOF
+        remote_host=ARGV[2]
+        remote_port=ARGV[3].to_i
+    else
+    $stderr.puts <<-EOF.strip_heredoc
+	Use as server:
+	#$0 localPort bridgeLocation
+	
+	Use as client:
+	#$0 localPort|STDIN bridgeURL remoteAddress remotePort
+	
+	Ex:
+	bridge$ #$0 8080 /bridge
+	
+	client$ #$0 8022 http://mybridge:8080/bridge remoteServer 22
+	client$ ssh localhost -p 8022
+	EOF
     exit
 end
 
 localPort=ARGV[0]
 
-require 'socket' 
+require 'socket'
 require 'thread'
 Thread.abort_on_exception = true
 
 MAXBUF=1024*640 # 640k
 if server
-	require 'webrick'
+    require 'webrick'
 
-	class BridgeServlet < WEBrick::HTTPServlet::AbstractServlet
+    class BridgeServlet < WEBrick::HTTPServlet::AbstractServlet
         @@connections = {}
 
-        def getSocket(req,res)
-            cid = req.path.split("/").last
-		    s = @@connections[cid]
-            if not s
-                $stderr.puts "Connection is not open for #{cid}=#{s}"
+        def get_socket(req,res)
+            conn_id = req.path.split("/").last
+            conn = @@connections[conn_id]
+            if not conn
+                $stderr.puts "[#{conn_id}] Connection is not open for #{conn_id}=#{conn}"
                 res.status=404
                 return nil
             end
-            s
+            conn
         end
 
-        def closeSocket(req,res)
-            cid = req.path.split("/").last
-        	return if not s=@@connections[cid]
-            s.close if not s.closed?
-            @@connections.delete(cid)
+        def close_socket(req,res)
+            conn_id = req.path.split("/").last
+            return if not conn=@@connections[conn_id]
+            conn.close if not conn.closed?
+            @@connections.delete(conn_id)
         end
 
         def do_POST(req, res)
-            cid = req.path.split("/").last
-			(remHost,remPort)=req.body.split(":")
-            remPort=remPort.to_i
-			$stderr.puts "Opening connection to #{remHost}:#{remPort}..."
+            conn_id = req.path.split("/").last
+            (remote_host,remote_port)=req.body.split(":")
+            remote_port=remote_port.to_i
+            $stderr.puts "[#{conn_id}] Opening connection to #{remote_host}:#{remote_port} for #{req.peeraddr}..."
             begin
-			    s=TCPSocket.open(remHost,remPort)
-                s.setsockopt(Socket::SOL_SOCKET, Socket::SO_KEEPALIVE, true)
-                @@connections[cid]=s
-			    $stderr.puts "Connected to #{remHost}:#{remPort}"
-            rescue 
-			    res['Content-Type'] = "text/plain"
+                conn=TCPSocket.open(remote_host,remote_port)
+                conn.setsockopt(Socket::SOL_SOCKET, Socket::SO_KEEPALIVE, true)
+                @@connections[conn_id]=conn
+                $stderr.puts "[#{conn_id}] Connected to #{remote_host}:#{remote_port} #{conn}"
+                res.status=201
+            rescue
+                res['Content-Type'] = "text/plain"
                 res.body=$!.message
-				$stderr.puts "Connection failed: #$!"
-                res.status=503 # Service Unavaiable
+                $stderr.puts "[#{conn_id}] Connection failed: #$!"
+                res.status=406 # Not Acceptable
             end
         end
 
-		def do_PUT(req, res)
-            cid = req.path.split("/").last
-            return if not s=getSocket(req,res)
+        def do_PUT(req, res)
+            conn_id = req.path.split("/").last
+            return if not s=get_socket(req,res)
             begin
-			    s.print req.body
+                s.print req.body
             rescue Errno::EPIPE
-                $stderr.puts "Connection closed in remote destination (PUT)"
-                closeSocket(req, res)
+                $stderr.puts "[#{conn_id}] Connection closed in remote destination (PUT)"
+                close_socket(req, res)
                 res.status=410 # GONE
             end
-		end
+        end
 
-		def do_GET(req, res)
-            cid = req.path.split("/").last
-            return if not s=getSocket(req,res)
+        def do_GET(req, res)
+            conn_id = req.path.split("/").last
+            return if not conn=get_socket(req,res)
             begin
-			    res.body = s.readpartial(MAXBUF)
+                res.body = conn.readpartial(MAXBUF)
             rescue EOFError, Errno::EPIPE, IOError
-                if s.closed?
-                    $stderr.puts "Connection closed by remote destination (GET)"
+                if conn.closed?
+                    $stderr.puts "[#{conn_id}] Connection closed by remote destination (GET)"
                 else
-                    $stderr.puts "Connection closed (GET) #{$!}"
+                    $stderr.puts "[#{conn_id}] Connection closed (GET) #{$!}"
                 end
-                closeSocket(req, res)
+                close_socket(req, res)
                 res.status=410 # GONE
-            rescue 
+            rescue
                 $stderr.puts $!.class
-            end            
-		end
+            end
+        end
 
         def do_DELETE(req, res)
-            $stderr.puts "Connection closed in client. Trying to close it in remote destination"
-            closeSocket(req, res)
+            $stderr.puts "[#{conn_id}] Connection closed in client. Trying to close it in remote destination"
+            close_socket(req, res)
+            res.status=200
         end
 
-	end
-
-	s = WEBrick::HTTPServer.new(
-		:Port            => localPort.to_i,
-        :RequestTimeout  => 600
-	)
-	s.mount(location, BridgeServlet)
-	trap("INT"){ s.shutdown }
-	s.start
-else
-	require "net/http"
-	require 'uri'
-
-    proxy=[nil,nil]
-    if ENV["http_proxy"] and not ENV["http_proxy"].empty?
-	    proxy=ENV["http_proxy"].gsub(/\/*/,"").split(":")[1..2]   
-        $stderr.puts "Using proxy: #{proxy[0]}:#{proxy[1]}"
     end
 
-    case localPort 
+    s = WEBrick::HTTPServer.new(
+        :Port            => localPort.to_i,
+        :RequestTimeout  => 600
+    )
+    s.mount(location, BridgeServlet)
+    trap("INT"){ s.shutdown }
+    s.start
+
+else # Client
+
+    require "net/http"
+    require 'uri'
+
+    url = URI(url)
+    if url.find_proxy
+        $stderr.puts "Using proxy: #{url.find_proxy}"
+    end
+
+    case localPort
     when "STDIN","-"
-        sIn=$stdin
-       	sOut=$stdout
+        _in=$stdin
+        _out=$stdout
         # Keeps this unbuffered
-        sIn.sync=true
-        sOut.sync=true
+        _in.sync=true
+        _out.sync=true
     else
         $stderr.puts "Opening local port #{localPort}"
-       	server = TCPServer.open(localPort.to_i)
+        local_server = TCPServer.open(localPort.to_i)
         $stderr.puts "Waiting for local connection to port #{localPort}"
-      	s = server.accept 
-        sIn=sOut=s
+        local_server_conn = local_server.accept
+        _in=_out=local_server_conn
         # Keep connection alive
-        s.setsockopt(Socket::SOL_SOCKET, Socket::SO_KEEPALIVE, true)
+        local_server_conn.setsockopt(Socket::SOL_SOCKET, Socket::SO_KEEPALIVE, true)
     end
 
-   	url = URI.parse(url)
     #unique Connection IDentifier
-    cid=`uuidgen`.chomp
+    conn_id=`uuidgen`.chomp
     connected=false
 
     # Open the connection
     begin
         begin
-            Net::HTTP::Proxy(proxy[0],proxy[1]).start(url.host, url.port) {|http|
-                $stderr.puts "Opening connection over HTTP bridge for #{remHost}:#{remPort} (#{cid})"
+            $stderr.puts "Opening connection over HTTP bridge for #{remote_host}:#{remote_port} (#{conn_id})"
+            Net::HTTP.start(url.host, url.port) do |http|
                 error=nil
-                res = http.post("#{url.path}/#{cid}","#{remHost}:#{remPort}") {|res| error=res }            
-                if res.kind_of? Net::HTTPServiceUnavailable
-                    $stderr.puts "The bridge failed to connect to the remote location: #{error}"
+                res = http.post("#{url.path}/#{conn_id}","#{remote_host}:#{remote_port}")
+                if res.kind_of? Net::HTTPCreated
+                    connected=true
+                else
+                    $stderr.puts "The bridge failed to connect to the remote location (#{res}): #{res.body}"
                     connected=false
                     break
-                else
-                    connected=true
                 end
-            }
+            end
         rescue Errno::EPIPE
-            $stderr.puts "Connection to bridge closed"
+            $stderr.puts "Connection to bridge #{url} closed"
             retry
         end
 
@@ -208,65 +227,62 @@ else
         exit 1 if not connected
 
         # Launch Local write/Remote read loop
-        Thread.new {
+        Thread.new do
             $stderr.puts "Local write/Remote read loop started"
             begin
-                Net::HTTP::Proxy(proxy[0],proxy[1]).start(url.host, url.port) {|http|
-                    http.read_timeout = 2>>64
-
+                Net::HTTP.start(url.host, url.port) do |http|
                     while connected
-                        res = http.get("#{url.path}/#{cid}") {|res|
-                            sOut.print res 
-                        }
+                        res = http.get("#{url.path}/#{conn_id}") {|res| _out.print res }
                         if res.kind_of? Net::HTTPGone
                             $stderr.puts "Connection closed in remote location (lw/rr)"
                             connected=false
-                            sIn.close if not sIn.closed?
+                            _in.close if not _in.closed?
                             break
                         elsif res.kind_of? Net::HTTPNotFound
-                            $stderr.puts "Connection not oppened by bridge"
+                            $stderr.puts "Connection not opened by bridge"
                             connected=false
                             break
                         end
                     end
-                } 
+                end
             rescue Errno::EPIPE
-                sIn.close if not sIn.closed?
+                _in.close if not _in.closed?
             rescue EOFError
                 # retry if local connection is still open
-                retry if not sIn.closed?
-                $stderr.puts "Connection to bridge closed (lr/rw)"
+                retry if not _in.closed?
+                $stderr.puts "Connection to bridge closed (lw/rr)"
             rescue Errno::ECONNREFUSED
-                $stderr.puts "Connection to bridge failed (lr/rw)"
-                sIn.close if not sIn.closed?
+                $stderr.puts "Connection to bridge failed (lw/rr)"
+                _in.close if not _in.closed?
             rescue Timeout::Error
                 $stderr.puts "Timeout (lr/rw)"
-                retry if not sIn.closed?
+                retry if not _in.closed?
+            rescue Net::ReadTimeout
+                $stderr.puts "Net::ReadTimeout (lw/rr)"
+                retry if not _in.closed?
             rescue Net::HTTPServerError
                 raise res.message
             end
-        }	
+        end
 
-        # If CTRL+C, SIGHUP or SIGTERM, close sIn (and itself)
-        trap("INT"){ sIn.close } 
-        trap("SIGHUP"){ sIn.close } 
-        trap("SIGTERM"){ sIn.close } 
+        # If CTRL+C, SIGHUP or SIGTERM, close _in (and itself)
+        trap("INT"){ _in.close }
+        trap("SIGHUP"){ _in.close }
+        trap("SIGTERM"){ _in.close }
 
         # Launch "Local read/Remote write loop started"
         $stderr.puts "Local read/Remote write loop started"
         # Keep buffer between retries
         buf=nil
         begin
-            Net::HTTP::Proxy(proxy[0],proxy[1]).start(url.host, url.port) {|http|
-                http.read_timeout = 2>>64
-
-                while buf or (connected and buf=sIn.readpartial(MAXBUF))
-                    res = http.put("#{url.path}/#{cid}",buf)
+            Net::HTTP.start(url.host, url.port) do |http|
+                while buf or (connected and buf=_in.readpartial(MAXBUF))
+                    res = http.put("#{url.path}/#{conn_id}",buf)
                     if res.kind_of? Net::HTTPGone
                         $stderr.puts "Connection closed in remote location (lr/rw)"
-                        sIn.close if not sIn.closed?
+                        _in.close if not _in.closed?
                         connected=false
-                        break 
+                        break
                     end
                     # Buffer sent, clear it
                     buf=nil
@@ -274,9 +290,12 @@ else
                 if connected
                     connected=false
                     $stderr.puts "Closing bridge connection to remote location"
-                    http.delete("#{url.path}/#{cid}")
+                    http.delete("#{url.path}/#{conn_id}")
                 end
-            }
+        end
+        rescue Net::ReadTimeout
+            $stderr.puts "Net::ReadTimeout (lr/rw)"
+            retry if not _in.closed? and connected
         rescue Net::HTTPServerError
             raise "Server said: '#{res.message}'"
         rescue EOFError
@@ -284,7 +303,7 @@ else
             connected=false
         rescue Errno::EPIPE, IOError
             # retry if local connection is still open
-            retry if not sIn.closed?
+            retry if not _in.closed?
             $stderr.puts "Connection to bridge closed (lr/rw)"
         end
     rescue Errno::ECONNREFUSED
