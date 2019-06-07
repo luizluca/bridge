@@ -84,6 +84,15 @@ Thread.abort_on_exception = true
 
 MAXBUF=1024*640 # 640k
 READ_TIMEOUT=60
+
+def get_HTTP(url)
+    http = Net::HTTP.new(url.host, url.port)
+    if url.scheme == "https"
+        http.use_ssl = true
+    end
+    http.start
+end
+
 if server
     require 'webrick'
 
@@ -236,16 +245,15 @@ else # Client
         begin
             $stderr.puts "Opening connection over HTTP bridge for #{remote_host}:#{remote_port} (#{conn_id})"
             # HACK! new().start() because of https://bugs.ruby-lang.org/issues/13351
-            Net::HTTP.new(url.host, url.port).start do |http|
-                error=nil
-                res = http.post("#{url.path}/#{conn_id}","#{remote_host}:#{remote_port}")
-                if res.kind_of? Net::HTTPCreated
-                    connected=true
-                else
-                    $stderr.puts "The bridge failed to connect to the remote location (#{res}): #{res.body}"
-                    connected=false
-                    break
-                end
+	          http = get_HTTP(url)
+
+            error=nil
+            res = http.post("#{url.path}/#{conn_id}","#{remote_host}:#{remote_port}")
+            if res.kind_of? Net::HTTPCreated
+                connected=true
+            else
+                $stderr.puts "The bridge failed to connect to the remote location (#{res}): #{res.body}"
+                connected=false
             end
         rescue Errno::EPIPE
             $stderr.puts "Connection to bridge #{url} closed"
@@ -259,20 +267,19 @@ else # Client
         Thread.new do
             $stderr.puts "Local write/Remote read loop started"
             begin
-                Net::HTTP.new(url.host, url.port).start do |http|
-                    http.read_timeout=READ_TIMEOUT+3
-                    while connected
-                        res = http.get("#{url.path}/#{conn_id}") {|res| _out.print res }
-                        if res.kind_of? Net::HTTPGone
-                            $stderr.puts "Connection closed in remote location (lw/rr)"
-                            connected=false
-                            _in.close if not _in.closed?
-                            break
-                        elsif res.kind_of? Net::HTTPNotFound
-                            $stderr.puts "Connection not opened on bridge"
-                            connected=false
-                            break
-                        end
+                http = get_HTTP(url)
+                http.read_timeout=READ_TIMEOUT+3
+                while connected
+                    res = http.get("#{url.path}/#{conn_id}") {|res| _out.print res }
+                    if res.kind_of? Net::HTTPGone
+                        $stderr.puts "Connection closed in remote location (lw/rr)"
+                        connected=false
+                        _in.close if not _in.closed?
+			break
+                    elsif res.kind_of? Net::HTTPNotFound
+                        $stderr.puts "Connection not opened on bridge"
+                       connected=false
+		       break
                     end
                 end
             rescue Errno::EPIPE
@@ -305,33 +312,32 @@ else # Client
         # Keep buffer between retries
         buf=nil
         begin
-            Net::HTTP.new(url.host, url.port).start do |http|
-                while connected
-                    begin
-                        # first read from _in ONLY if buf is empty
-                        buf=_in.readpartial(MAXBUF) if !buf
-                    rescue IO::WaitReadable
-                        IO.select([_in])
-                        retry
-                    rescue EOFError
-                        $stderr.puts "Local connection closed (lr/rw)"
-                        $stderr.puts "Closing bridge connection to remote location"
-                        http.delete("#{url.path}/#{conn_id}")
-                        connected=false
-                        break
-                    end
-
-                    res = http.put("#{url.path}/#{conn_id}",buf)
-                    if res.kind_of? Net::HTTPGone
-                        $stderr.puts "Connection closed in remote location (lr/rw)"
-                        _in.close if not _in.closed?
-                        connected=false
-                        break
-                    end
-
-                    # Buffer sent, clear it
-                    buf=nil
+	          http = get_HTTP(url)
+            while connected
+                begin
+                    # first read from _in ONLY if buf is empty
+                    buf=_in.readpartial(MAXBUF) if !buf
+                rescue IO::WaitReadable
+                    IO.select([_in])
+                    retry
+                rescue EOFError
+                    $stderr.puts "Local connection closed (lr/rw)"
+                    $stderr.puts "Closing bridge connection to remote location"
+                    http.delete("#{url.path}/#{conn_id}")
+                    connected=false
+                    break
                 end
+
+                res = http.put("#{url.path}/#{conn_id}",buf)
+                if res.kind_of? Net::HTTPGone
+                    $stderr.puts "Connection closed in remote location (lr/rw)"
+                    _in.close if not _in.closed?
+                    connected=false
+                    break
+                end
+
+                # Buffer sent, clear it
+                buf=nil
             end
         rescue Net::ReadTimeout
             $stderr.puts "Net::ReadTimeout (lr/rw)"
