@@ -17,7 +17,8 @@
 #    Created on 2010-08-10
 #
 # Changelog:
-#
+# * 2019-06-10
+# - Add support for https
 # * 2017-03-17
 # - Add support for http proxy authentication using auto-detect support
 #
@@ -84,6 +85,15 @@ Thread.abort_on_exception = true
 
 MAXBUF=1024*640 # 640k
 READ_TIMEOUT=60
+
+def create_http(url)
+    http = Net::HTTP.new(url.host, url.port)
+    if url.scheme == "https"
+        http.use_ssl = true
+    end
+    http
+end
+
 if server
     require 'webrick'
 
@@ -236,7 +246,7 @@ else # Client
         begin
             $stderr.puts "Opening connection over HTTP bridge for #{remote_host}:#{remote_port} (#{conn_id})"
             # HACK! new().start() because of https://bugs.ruby-lang.org/issues/13351
-            Net::HTTP.new(url.host, url.port).start do |http|
+            create_http(url).start do |http|
                 error=nil
                 res = http.post("#{url.path}/#{conn_id}","#{remote_host}:#{remote_port}")
                 if res.kind_of? Net::HTTPCreated
@@ -259,7 +269,7 @@ else # Client
         Thread.new do
             $stderr.puts "Local write/Remote read loop started"
             begin
-                Net::HTTP.new(url.host, url.port).start do |http|
+                create_http(url).start do |http|
                     http.read_timeout=READ_TIMEOUT+3
                     while connected
                         res = http.get("#{url.path}/#{conn_id}") {|res| _out.print res }
@@ -305,7 +315,7 @@ else # Client
         # Keep buffer between retries
         buf=nil
         begin
-            Net::HTTP.new(url.host, url.port).start do |http|
+            create_http(url).start do |http|
                 while connected
                     begin
                         # first read from _in ONLY if buf is empty
