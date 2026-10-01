@@ -10,13 +10,13 @@ The program is divided in two parts: the first one implements a HTTP server, tha
 The seconds part is the client program. It opens a local TCP port or reads STDIN. After a connection is received, it connects to the server program just like a browser would do and exchange packages using HTTP requests (in this case: GET, PUT, POST, DELETE). 
 How to run
 
-Download bridge file (attachments bellow this page). It is a ruby script that implements both server and client. It depends on webrick and net:http that are also ruby on rails dependencies. Run it as any other ruby script. Server is activated when two parameters are passed: local server port and relative URL
+Download bridge file (attachments bellow this page). It is a ruby script that implements both server and client. It depends on net:http and it will opportunistically use WEBrick (or use a builtin MiniWEBrick). Run it as any other ruby script. Server is activated when two parameters are passed: local server port and relative URL
 
 ```
 bridge$ ruby bridge 8080 /bridge
 ```
 
-This brings up Webrick running in port 8080 and answering bridge requests at http://myserver:8080/bridge
+This brings up the HTTP server running in port 8080 and answering bridge requests at http://myserver:8080/bridge
 Now, it is time to run the client program:
 
 ```

@@ -88,7 +88,168 @@ Thread.abort_on_exception = true
 MAXBUF=1024*640 # 640k
 READ_TIMEOUT=60
 if server
-    require 'webrick'
+
+    begin
+        require 'webrick'
+    rescue LoadError
+        # ==========================================
+        # Fake WEBrick
+        # ==========================================
+        module WEBrick
+            module HTTPServlet
+                class AbstractServlet
+                end
+            end
+
+            class HTTPRequest
+                attr_reader :method, :path, :version, :headers, :body, :peeraddr
+
+                def initialize(method, path, version, headers, body, peeraddr)
+                    @method, @path, @version = method, path, version
+                    @headers, @body, @peeraddr = headers, body, peeraddr
+                end
+            end
+
+            class HTTPResponse
+                attr_accessor :status, :body
+                attr_reader :headers
+
+                def initialize
+                    @status = 200
+                    @headers = {}
+                    @body = ""
+                end
+
+                def []=(key, val)
+                    @headers[key] = val
+                end
+            end
+
+            class HTTPServer
+                STATUS_NAMES = {
+                    200 => "OK", 201 => "Created", 204 => "No Content",
+                    404 => "Not Found", 405 => "Method Not Allowed",
+                    406 => "Not Acceptable", 410 => "Gone", 500 => "Internal Error"
+                }
+
+                def initialize(options = {})
+                    @port = options[:Port] || 8080
+                    @mounts = {}
+                end
+
+                def mount(path, servlet_class)
+                    @mounts[path] = servlet_class.new
+                end
+
+                def start
+                    @servers = Socket.tcp_server_sockets(@port).map do |sock|
+                        sock.autoclose = false
+                        TCPServer.for_fd(sock.fileno)
+                    end
+
+                    now = Time.now.strftime("%Y-%m-%d %H:%M:%S")
+                    $stderr.puts "[#{now}] INFO  (Mini)WEBrick 1.0.0"
+                    $stderr.puts "[#{now}] INFO  ruby #{RUBY_VERSION} (#{RUBY_RELEASE_DATE}) [#{RUBY_PLATFORM}]"
+                    $stderr.puts "[#{now}] INFO  WEBrick::HTTPServer#start: pid=#{Process.pid} port=#{@port}"
+
+                    loop do
+                        reads, = IO.select(@servers)
+                        reads.each do |server|
+                            begin
+                                client = server.accept
+                            rescue IOError
+                                next
+                            end
+
+                            Thread.new(client) { |c| handle_client(c) }
+                        end
+                    end
+                end
+
+                def shutdown
+                    @server.close unless @server.closed?
+                end
+
+                private
+
+                def handle_client(c)
+                    loop do
+                        req_line = c.gets
+                        break if req_line.nil? || req_line.strip.empty?
+
+                        method, raw_path, version = req_line.strip.split(/\s+/, 3)
+
+                        if method.nil? || raw_path.nil? || version.nil?
+                            c.print "HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n"
+                            break
+                        end
+
+                        require 'uri' unless defined?(URI)
+                        begin
+                            parsed_uri = URI.parse(raw_path)
+                            path = URI.decode_www_form_component(parsed_uri.path)
+                        rescue URI::InvalidURIError
+                            c.print "HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n"
+                            break
+                        end
+
+                        headers = {}
+                        while (line = c.gets) && line != "\r\n"
+                            key, value = line.split(/:\s*/, 2)
+                            headers[key.downcase] = value.strip if key && value
+                        end
+
+                        body = ""
+                        if headers['content-length']
+                            len = headers['content-length'].to_i
+                            body = c.read(len) if len > 0
+                        end
+
+                        req = HTTPRequest.new(method, path, version, headers, body, c.peeraddr)
+                        res = HTTPResponse.new
+
+                        servlet = @mounts.find { |m_path, _| path.start_with?(m_path) }&.last
+
+                        if servlet
+                            begin
+                                case method
+                                when 'GET'    then servlet.do_GET(req, res)
+                                when 'POST'   then servlet.do_POST(req, res)
+                                when 'PUT'    then servlet.do_PUT(req, res)
+                                when 'DELETE' then servlet.do_DELETE(req, res)
+                                else res.status = 405
+                                end
+                            rescue => e
+                                res.status = 500
+                                $stderr.puts "Servlet Error: #{e.message}"
+                            end
+                        else
+                            res.status = 404
+                        end
+
+                        status_msg = STATUS_NAMES[res.status] || "Unknown"
+                        c.print "HTTP/1.1 #{res.status} #{status_msg}\r\n"
+                        c.print "Content-Length: #{res.body.bytesize}\r\n"
+                        c.print "Connection: keep-alive\r\n"
+                        res.headers.each { |k, v| c.print "#{k}: #{v}\r\n" }
+                        c.print "\r\n#{res.body}"
+
+                        now_log = Time.now.strftime("%d/%b/%Y:%H:%M:%S %z")
+                        ip_addr = c.peeraddr[3]
+
+                        $stderr.puts %(#{ip_addr} - - [#{now_log}] "#{method} #{path} #{version}" #{res.status} #{res.body.bytesize})
+                        $stderr.puts %(- -> #{path})
+
+                        break if headers['connection'] && headers['connection'].downcase == 'close'
+                    end
+                rescue EOFError, Errno::ECONNRESET, Errno::EPIPE
+                    # Client closed connection normally
+                ensure
+                    c.close unless c.closed?
+                end
+            end
+        end
+    end
 
     class BridgeServlet < WEBrick::HTTPServlet::AbstractServlet
         @@connections = {}
