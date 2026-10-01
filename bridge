@@ -18,6 +18,9 @@
 #
 # Changelog:
 #
+# * 2026-10-01
+# - Use mutex to isolate concurrent access to connections
+#
 # * 2017-03-17
 # - Add support for http proxy authentication using auto-detect support
 #
@@ -89,10 +92,11 @@ if server
 
     class BridgeServlet < WEBrick::HTTPServlet::AbstractServlet
         @@connections = {}
+        @@mutex = Mutex.new
 
         def get_socket(req,res)
             conn_id = req.path.split("/").last
-            conn = @@connections[conn_id]
+            conn = @@mutex.synchronize { @@connections[conn_id] }
             if not conn
                 $stderr.puts "[#{conn_id}] Connection is not open for #{conn_id}=#{conn}"
                 res.status=404
@@ -103,9 +107,9 @@ if server
 
         def close_socket(req,res)
             conn_id = req.path.split("/").last
-            return if not conn=@@connections[conn_id]
+            conn = @@mutex.synchronize { @@connections.delete(conn_id) }
+            return if not conn
             conn.close if not conn.closed?
-            @@connections.delete(conn_id)
         end
 
         def do_POST(req, res)
@@ -116,7 +120,7 @@ if server
             begin
                 conn=TCPSocket.open(remote_host,remote_port)
                 conn.setsockopt(Socket::SOL_SOCKET, Socket::SO_KEEPALIVE, true)
-                @@connections[conn_id]=conn
+                @@mutex.synchronize { @@connections[conn_id] = conn }
                 $stderr.puts "[#{conn_id}] Connected to #{remote_host}:#{remote_port} #{conn}"
                 res.status=201
             rescue
