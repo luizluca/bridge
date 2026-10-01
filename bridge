@@ -149,11 +149,17 @@ if server
             begin
                 res.body = conn.read_nonblock(MAXBUF)
             rescue IO::WaitReadable
-                if IO.select([conn],[],[],READ_TIMEOUT-3)
-                    retry
-                else # Timeout
-                    res.body = ''
-                    res.status=204 # No Content
+                begin
+                    if IO.select([conn],[],[],READ_TIMEOUT-3)
+                        retry
+                    else # Timeout
+                        res.body = ''
+                        res.status=204 # No Content
+                    end
+                rescue IOError
+                    $stderr.puts "[#{conn_id}] Connection closed while waiting (GET)"
+                    close_socket(req, res)
+                    res.status=410 # Fone
                 end
             rescue EOFError, Errno::EPIPE, IOError
                 if conn.closed?
