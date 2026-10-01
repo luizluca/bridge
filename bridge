@@ -398,9 +398,8 @@ else # Client
     end
 
     #unique Connection IDentifier
-    conn_id=`uuidgen`.chomp
+    conn_id=SecureRandom.uuid
     connected=false
-
 
     # Open the connection
     begin
